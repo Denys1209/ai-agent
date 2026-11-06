@@ -1,0 +1,45 @@
+syntax = "proto3";
+
+package chat;
+option csharp_namespace = "Chat";
+
+enum Roles {
+    UNSPECIFIED = 0;
+    SYSTEM = 1;
+    USER = 2;
+    ASSISTANT = 3;
+}
+
+message ImageAttachment {
+    bytes data = 1;
+    string mimeType = 2;
+}
+
+message Message {
+    string text = 1;
+    Roles role = 2;
+    repeated ImageAttachment imageAttachment = 3;
+}
+
+message History {
+    repeated Message messages = 1;
+}
+
+message Request {
+    History history = 1;
+    Message userMessage = 2;
+}
+
+message Response {
+    string answer = 1;
+    string thoughts = 2;
+}
+
+
+service Gemma4Server {
+    rpc MakeRequest (Request) returns (Response);
+    rpc MakeRequestStreamBackTokenByToken (Request) returns (stream Response);
+  
+}
+
+

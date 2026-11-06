@@ -13,6 +13,9 @@ parser.add_argument("--max-steps", type=int, default=8)
 args = parser.parse_args()
 
 tools.set_root(args.directory)
+print("Indexing project...")
+print(tools.build_index())
+
 if not tools.ROOT.is_dir():
     sys.exit(f"Not a directory: {tools.ROOT}")
 

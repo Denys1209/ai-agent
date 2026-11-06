@@ -1,12 +1,85 @@
 import inspect, subprocess
+import hashlib, os
+import chromadb
 from pathlib import Path
+
 
 ROOT = Path(".").resolve()
 TOOLS = {}
 
+SKIP_DIRS = {".git", "node_modules", "venv", ".venv", "__pycache__", "dist", "build", ".idea", ".vscode"}
+TEXT_EXT = {".py", ".js", ".ts", ".tsx", ".jsx", ".java", ".cs", ".go", ".rs", ".c", ".h",
+            ".cpp", ".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".html", ".css",
+            ".proto", ".sh", ".ps1"}
+
+MAX_FILE_BYTES = 200_000
+CHUCK_LINES, OVERLAP = 40, 10
+
+_collection = None
+
+def _get_collection():
+    global _collection
+    if _collection is None:
+        key = hashlib.md5(str(ROOT).encode()).hexdigest()[:12]
+        client = chromadb.PersistentClient(path=str(Path.home() / ".agent_index" / key))
+        _collection = client.get_or_create_collection("code", metadata={"hnsw:space": "cosine"})
+    return _collection
+
+def _source_files():
+    for dirpath, dirnames, filenames in os.walk(ROOT):
+        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+
+        for name in filenames:
+            p = Path(dirpath) / name
+            if p.suffix.lower() in TEXT_EXT and p.stat().st_size <= MAX_FILE_BYTES:
+                yield p
+
+def _chunks(text):
+    lines = text.splitlines()
+    step = CHUCK_LINES - OVERLAP
+    for start in range(0, max(len(lines), 1), step):
+        piece = lines[start:start + CHUCK_LINES]
+        if "".join(piece).strip():
+            yield start + 1, start + len(piece), "\n".join(piece)
+        if start + CHUCK_LINES >= len(lines):
+            break
+def index_file(p: Path):
+    col = _get_collection()
+    rel = p.relative_to(ROOT).as_posix()
+    col.delete(where={"path": rel})
+
+    if not p.exists():
+        return
+
+    text = p.read_text(encoding="utf-8", errors="replace")
+    ids, docs, metas = [], [], []
+
+    for s, e, chuck in _chunks(text):
+        ids.append(f"{rel}:{s}")
+        docs.append(f"File: {rel}\n{chuck}")
+        metas.append({"path": rel, "start": s, "end": e, "mtime": p.stat().st_mtime})
+
+    for i in range(0, len(ids), 100):
+        col.upsert(ids=ids[i:i+100], documents=docs[i:i+100], metadatas=metas[i:i+100])
+
+def build_index() -> str:
+    col = _get_collection()
+    existing = {m["path"]: m["mtime"] for m in col.get(include=["metadatas"])["metadatas"]}
+    seen, changed = set(), 0
+    for p in _source_files():
+        rel = p.relative_to(ROOT).as_posix()
+        seen.add(rel)
+        if existing.get(rel) != p.stat().st_mtime:   # new or modified since last run
+            index_file(p)
+            changed += 1
+    for rel in set(existing) - seen:                  # file was deleted
+        col.delete(where={"path": rel})
+    return f"index ready: {changed} files updated, {len(seen)} total"
+
 def set_root(path: str):
-    global ROOT
+    global ROOT, _collection
     ROOT = Path(path).resolve()
+    _collection = None
 
 def tool(fn):
     TOOLS[fn.__name__] = fn
@@ -17,6 +90,23 @@ def safe_path(p: str) -> Path:
     if not full.is_relative_to(ROOT):
         return ValueError("path is outside the project folder")
     return full
+
+@tool
+def semantic_search(query: str, n: int = 5) -> str:
+    """Use this when you need to find code or text by meaning use this tool over reading file when you can, e.g. 'where are users authenticated'. For exact names use search_code."""
+    col = _get_collection()
+    if col.count() == 0:
+        return "index is empty"
+
+    res = col.query(query_texts=[query], n_results=min(int(n), 10))
+    out = []
+    for doc, meta, dist in zip(res["documents"][0], res["metadatas"][0], res["distances"][0]):
+        snippet = doc.split("\n", 1)[1][:600]
+        out.append(f"{meta['path']} lines {meta['start']}-{meta['end']} (score {1 - dist:.2f})\n{snippet}")
+
+    return "\n---\n".join(out)
+
+
 
 @tool
 def list_files(path: str = ".") -> str:
@@ -44,6 +134,7 @@ def write_file(path: str, content: str) -> str:
         return "user declined"
 
     safe_path(path).write_text(content, encoding="utf-8")
+    index_file(safe_path(path)) 
     return "written"
 
 @tool
@@ -70,6 +161,7 @@ def create_file(path: str, content: str = "") -> str:
         return "user declined"
     full.parent.mkdir(parents=True, exist_ok=True)
     full.write_text(content, encoding="utf-8")
+    index_file(safe_path(path)) 
     return f"file created: {path} ({len(content)} characters)"
 
 def describe_tools() -> str:

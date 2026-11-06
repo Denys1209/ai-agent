@@ -46,6 +46,32 @@ def write_file(path: str, content: str) -> str:
     safe_path(path).write_text(content, encoding="utf-8")
     return "written"
 
+@tool
+def create_folder(path: str) -> str:
+    """Create a new folder (and any missing parent folders)."""
+    full = safe_path(path)
+    if full.exists():
+        return f"error: '{path}' already exists"
+    if input(f"Create folder {path}? [y/N] ").lower() != "y":
+        return "user declined"
+    full.mkdir(parents=True)
+    return f"folder created: {path}"
+
+@tool
+def create_file(path: str, content: str = "") -> str:
+    """Create a new file with optional content. Fails if the file already exists."""
+
+    full = safe_path(path)
+
+    if full.exists():
+        return f"error: '{path}' already exists. Use write_file to overwrite it."
+
+    if input(f"Create file '{path}' [y/N]").lower() != "y":
+        return "user declined"
+    full.parent.mkdir(parents=True, exist_ok=True)
+    full.write_text(content, encoding="utf-8")
+    return f"file created: {path} ({len(content)} characters)"
+
 def describe_tools() -> str:
     lines = []
     for name, fn in TOOLS.items():

@@ -1,4 +1,5 @@
 import argparse, json, re, sys
+import time
 import grpc
 import chat_pb2, chat_pb2_grpc
 import tools
@@ -28,6 +29,7 @@ Paths are relative to the project folder."""
 
 stub = chat_pb2_grpc.Gemma4ServerStub(grpc.insecure_channel(args.server))
 
+
 def msg(role, text):
     return chat_pb2.Message(role=role, text=text)
 
@@ -40,10 +42,28 @@ def parse(text):
     m = re.search(r"\{.*\}", text, re.DOTALL)
     return json.loads(m.group(0)) if m else None
 
+def log(event):
+    with open("trace.jsonl", "a", encoding="utf-8") as f:
+        f.write(json.dumps({"t": time.time(), **event}) + "\n")
+
+def trim(messages, budget_chars=40000):
+    total = sum(len(m.text) for m in messages)
+    for m in messages[1:]:
+        if (total <= budget_chars):
+            break
+        if m.text.startswith("TOOL RESULT:") and len(m.text) > 300:
+            total -= len(m.text) - 300
+            m.text = m.text[:300] + "\n...[old result trimmed]"
+
+messages = [msg(chat_pb2.SYSTEM, SYSTEM)]
+
 def run_agent(task, max_steps):
-    messages = [msg(chat_pb2.SYSTEM, SYSTEM), msg(chat_pb2.USER, task)]
+    messages.append(msg(chat_pb2.USER, task))
+    log({"type":"task", "text":task})
     for step in range(max_steps):
+        trim(messages)
         reply = ask(messages)
+        log({"type":"model", "step": step, "text":reply})
         messages.append(msg(chat_pb2.ASSISTANT, reply))
         try:
             action = parse(reply)
@@ -54,6 +74,7 @@ def run_agent(task, max_steps):
         if "final" in action:
             return action["final"]
         result = run_tool(action.get("tool", ""), action.get("args", {}))
+        log({"type": "tool", "step": step, "call": action, "result":result})
         print(f"[step {step}] {action} -> {result[:150]!r}")
         messages.append(msg(chat_pb2.USER, f"TOOL RESULT:\n{result}"))
     return "Stopped: step limit reached."

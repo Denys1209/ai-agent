@@ -22,12 +22,12 @@ class MyGemma4Handler():
         self.THINK_PATTERN = re.compile(r"<\|channel>thought\n(.*?)<channel\|>", re.DOTALL)
 
         chat_handler = Gemma4ChatHandler(
-            clip_model_path = ".\\mmproj-F16.gguf",
+            clip_model_path = ".\\aiModel\\mmproj-F16.gguf",
             enable_thinking = True
         )
 
         self.llm = Llama(
-            model_path = ".\\gemma-4-E4B-it-Q8_0.gguf",
+            model_path = ".\\aiModel\\gemma-4-E4B-it-Q8_0.gguf",
             chat_handler = chat_handler,
             n_gpu_layers = 'all',
             n_ctx = 16384,
